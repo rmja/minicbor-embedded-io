@@ -2,12 +2,12 @@ use embedded_io::asynch::Read;
 use minicbor::{decode, Decode, Decoder};
 
 #[derive(Debug)]
-pub struct CborReader<R>
+pub struct CborReader<'b, R>
 where
     R: Read,
 {
     reader: R,
-    buf: [u8; 200],
+    buf: &'b mut [u8],
     read: usize,
     decoded: usize,
 }
@@ -24,35 +24,38 @@ impl<T: embedded_io::Error> From<T> for Error {
     }
 }
 
-impl<R: Read> CborReader<R> {
+impl<'b, R: Read> CborReader<'b, R> {
     /// Create a new reader
     ///
     /// The provided `buf` must be sufficiently large to contain what corresponds
     /// to one decode item.
-    pub fn new(reader: R) -> Self {
+    pub fn new(reader: R, buf: &'b mut [u8]) -> Self {
         Self {
             reader,
-            buf: [0; 200],
+            buf,
             read: 0,
             decoded: 0,
         }
     }
 }
 
-impl<R> CborReader<R>
+impl<R> CborReader<'_, R>
 where
     R: Read,
 {
     /// Read the next CBOR value and decode it
-    pub async fn read<'a, T: Decode<'a, ()>>(&mut self) -> Result<Option<T>, Error> {
+    pub async fn read<T>(&mut self) -> Result<Option<T>, Error>
+    where
+        for<'a> T: Decode<'a, ()>,
+    {
         self.read_with(&mut ()).await
     }
 
     /// Like [`CborReader::read`] but accepting a user provided decoding context.
-    pub async fn read_with<'a, C, T: Decode<'a, C>>(
-        &mut self,
-        ctx: &mut C,
-    ) -> Result<Option<T>, Error> {
+    pub async fn read_with<C, T>(&mut self, ctx: &mut C) -> Result<Option<T>, Error>
+    where
+        for<'a> T: Decode<'a, C>,
+    {
         loop {
             if self.decoded == 0 {
                 let len = self.reader.read(&mut self.buf[self.read..]).await?;
@@ -67,13 +70,11 @@ where
                 self.read += len;
             }
 
-            // let mut decoder = Decoder::new(&self.buf[self.decoded..self.read]);
-            // decoder.decode_with::<C, T>(ctx);
-
-            // let decoded: Option<T> = Self::try_decode_with(&self.buf[self.decoded..self.read], ctx)?;
-            // if decoded.is_some() {
-            //      return Ok(decoded);
-            // }
+            let decoded: Option<T> =
+                Self::try_decode_with(&self.buf[self.decoded..self.read], ctx)?;
+            if decoded.is_some() {
+                return Ok(decoded);
+            }
 
             // Remove the just decoded value from the buffer by moving the
             // remaining, unused bytes in the buffer to the beginning
