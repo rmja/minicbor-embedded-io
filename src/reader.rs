@@ -55,8 +55,7 @@ where
     ) -> Result<Option<T>, Error> {
         loop {
             if self.decoded == 0 {
-                // let len = self.reader.read(&mut self.buf[self.read..]).await?;
-                let len = 2;
+                let len = self.reader.read(&mut self.buf[self.read..]).await?;
                 if len == 0 {
                     return if self.read == 0 {
                         Ok(None)
@@ -96,4 +95,10 @@ where
             Err(e) => Err(Error::Decode(e)),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn can_read() {}
 }
