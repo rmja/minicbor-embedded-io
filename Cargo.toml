@@ -3,9 +3,12 @@ name = "minicbor-embedded-io"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+alloc = []
+
 [dependencies]
 embedded-io = { version = "0.4", features = ["async"] }
-minicbor = "0.19"
+minicbor = { path = "../minicbor/minicbor" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
