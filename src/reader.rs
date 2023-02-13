@@ -220,7 +220,7 @@ where
     async fn read_array_item<'b, R: Read>(
         &mut self,
         reader: &mut CborReader<'b, R>,
-        ctx: &mut (),
+        _ctx: &mut (),
     ) -> Result<(), Error> {
         if let Some(item) = reader.read::<T>().await? {
             self.push(item);
