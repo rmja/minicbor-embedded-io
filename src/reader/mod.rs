@@ -6,12 +6,16 @@ use minicbor::{
 
 const BREAK: u8 = 0xFF;
 
+pub mod direct222;
+mod direct2;
+mod direct;
+
 #[derive(Debug)]
 pub struct CborReader<'b, R>
 where
     R: Read,
 {
-    reader: R,
+    source: R,
     buf: &'b mut [u8],
     read: usize,
     decoded: usize,
@@ -53,9 +57,9 @@ impl<'b, R: Read> CborReader<'b, R> {
     ///
     /// The provided `buf` must be sufficiently large to contain what corresponds
     /// to one decode item.
-    pub fn new(reader: R, buf: &'b mut [u8]) -> Self {
+    pub fn new(source: R, buf: &'b mut [u8]) -> Self {
         Self {
-            reader,
+            source,
             buf,
             read: 0,
             decoded: 0,
@@ -134,7 +138,7 @@ where
     /// Peek the next byte in the buffer
     async fn peek(&mut self) -> Result<Option<u8>, Error> {
         if self.decoded == 0 {
-            let len = self.reader.read(&mut self.buf[self.read..]).await?;
+            let len = self.source.read(&mut self.buf[self.read..]).await?;
             if len == 0 {
                 return if self.read == 0 {
                     Ok(None)
@@ -164,7 +168,7 @@ where
     {
         loop {
             if self.decoded == 0 {
-                let len = self.reader.read(&mut self.buf[self.read..]).await?;
+                let len = self.source.read(&mut self.buf[self.read..]).await?;
                 if len == 0 {
                     return if self.read == 0 {
                         Ok(None)
@@ -258,6 +262,7 @@ mod tests {
         assert!(reader.read::<u8>().await.unwrap().is_none());
     }
 
+    #[cfg(feature = "alloc")]
     #[tokio::test]
     async fn can_read_with_vec() {
         let mut buf = [0; 16];
