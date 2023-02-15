@@ -71,7 +71,19 @@ where
                 }
 
                 loop {
-                    self.current = Some(Handle::from(&mut self.reader).await?);
+                    // The lifetime for &mut self is limited to call to read_with(),
+                    // but we need a reader that exceeds this lifetime to store
+                    // a "current" reference inside the reader, as the active
+                    // slice returned from the reader must live between calls to read_with().
+                    //
+                    // # SAFETY
+                    //
+                    // We only advance the the reader here behind a &mut self
+                    let reader = &mut self.reader;
+                    let reader = unsafe { core::mem::transmute::<&mut R, &'m mut R>(reader) };
+                    let handle = reader.read().await?;
+                    self.current = Some(Handle::new(handle));
+
                     let handle = self.current.as_ref().unwrap();
                     let slice = handle.as_slice();
                     let len = slice.len();
@@ -164,11 +176,8 @@ impl<'m, R> Handle<'m, R>
 where
     R: DirectRead + 'm,
 {
-    async fn from(source: &mut R) -> Result<Handle<'m, R>, Error> {
-        let source = unsafe { core::mem::transmute::<&mut R, &mut R>(source) };
-        let handle = source.read().await?;
-
-        Ok(Handle { pos: 0, handle })
+    const fn new(handle: R::Handle<'m>) -> Self {
+        Self { pos: 0, handle }
     }
 
     fn as_slice(&self) -> &[u8] {

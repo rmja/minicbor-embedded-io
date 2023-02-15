@@ -185,8 +185,7 @@ where
             if decoded.is_some() {
                 self.decoded += decoder.position();
                 return Ok(decoded);
-            }
-            else if self.decoded == 0 && self.read == self.buf.len() {
+            } else if self.decoded == 0 && self.read == self.buf.len() {
                 return Err(Error::BufferTooSmall);
             }
 
