@@ -8,8 +8,8 @@ where
     R: DirectRead,
 {
     buf: &'b mut [u8],
-    read: usize,
-    decoded: usize,
+    buf_written: usize,
+    buf_decoded: usize,
     reader: R,
     current: Option<Handle<'m, R>>,
 }
@@ -33,8 +33,8 @@ where
     pub fn new(buf: &'r mut [u8], source: R) -> Self {
         Self {
             buf,
-            read: 0,
-            decoded: 0,
+            buf_written: 0,
+            buf_decoded: 0,
             reader: source,
             current: None,
         }
@@ -45,6 +45,27 @@ impl<'m, R> DirectCborReader<'_, 'm, R>
 where
     R: DirectRead + 'm,
 {
+    /// Peek the next byte in the buffer
+    async fn peek(&mut self) -> Result<Option<u8>, Error> {
+        if self.buf_decoded == 0 {
+            if self.read_to_buf().await? == 0 {
+                return Ok(None)
+            }
+        }
+
+        if self.buf_decoded < self.buf_written {
+            Ok(Some(self.buf[self.buf_decoded]))
+        } else {
+            let current = self.current.as_mut().unwrap();
+            let slice = current.as_slice();
+            if current.pos < slice.len() {
+                Ok(Some(slice[current.pos]))
+            } else {
+                Err(Error::UnexpectedEof)
+            }
+        }
+    }
+
     /// Read the next CBOR value and decode it
     pub async fn read<T>(&mut self) -> Result<Option<T>, Error>
     where
@@ -59,78 +80,41 @@ where
         for<'a> T: Decode<'a, C>,
     {
         loop {
-            if self.decoded == 0 {
-                if let Some(handle) = self.current.as_ref() {
-                    if handle.handle.is_completed() {
-                        return if self.read == 0 {
-                            Ok(None)
-                        } else {
-                            Err(Error::UnexpectedEof)
-                        };
-                    }
+            if self.buf_decoded == 0 {
+                if self.read_to_buf().await? == 0 {
+                    return Ok(None)
                 }
+            }
 
-                loop {
-                    // The lifetime for &mut self is limited to call to read_with(),
-                    // but we need a reader that exceeds this lifetime to store
-                    // a "current" reference inside the reader, as the active
-                    // slice returned from the reader must live between calls to read_with().
-                    //
-                    // # SAFETY
-                    //
-                    // We only advance the the reader here behind a &mut self
-                    let reader = &mut self.reader;
-                    let reader = unsafe { core::mem::transmute::<&mut R, &'m mut R>(reader) };
-                    let handle = reader.read().await?;
-                    self.current = Some(Handle::new(handle));
-
-                    let handle = self.current.as_ref().unwrap();
-                    let slice = handle.as_slice();
-                    let len = slice.len();
-
-                    if self.read + len <= self.buf.len() {
-                        // This handle can fit entirely in the buffer
-                        let offset = self.read;
-                        self.buf[offset..offset + len].copy_from_slice(slice);
-                        self.read += len;
-
-                        if handle.handle.is_completed() {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
+            // First, try and read an item from the buffer
+            if self.buf_written > 0 {
+                let mut decoder = Decoder::new(&self.buf[self.buf_decoded..self.buf_written]);
+                let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
+                if decoded.is_some() {
+                    self.buf_decoded += decoder.position();
+                    return Ok(decoded);
                 }
             }
 
             let current = self.current.as_mut().unwrap();
-
-            // First, try and read an item from the buffer
-            let mut decoder = Decoder::new(&self.buf[self.decoded..self.read]);
-            let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
-            if decoded.is_some() {
-                self.decoded += decoder.position();
-                return Ok(decoded);
-            }
-
             let handle_slice = current.as_slice();
             if !handle_slice.is_empty() {
                 // Second, try and read from between buffer and active handle
-                if self.read > 0 {
+                if self.buf_written > 0 {
                     // "borrow" from the current active handle so that we try to read a single item
                     // that spans between the buffer and the handle
-                    let unused = self.buf.len() - self.read;
+                    let unused = self.buf.len() - self.buf_written;
                     let to_copy = usize::min(unused, handle_slice.len());
 
-                    let pos = self.read;
+                    let pos = self.buf_written;
                     self.buf[pos..pos + to_copy].copy_from_slice(&handle_slice[..to_copy]);
 
-                    let mut decoder = Decoder::new(&self.buf[..self.read]);
+                    let mut decoder = Decoder::new(&self.buf[..self.buf_written]);
                     let decoded =
                         Self::try_decode_with(&mut decoder, ctx)?.ok_or(Error::BufferTooSmall)?;
 
-                    current.pos = decoder.position() - self.decoded;
-                    self.read = 0;
+                    current.pos = decoder.position() - self.buf_decoded;
+                    self.buf_written = 0;
 
                     return Ok(Some(decoded));
                 }
@@ -149,11 +133,57 @@ where
                     return Err(Error::BufferTooSmall);
                 }
                 self.buf[..to_copy].copy_from_slice(&handle_slice[current.pos..]);
-                self.read += to_copy;
+                self.buf_written += to_copy;
             }
 
-            self.read -= self.decoded;
-            self.decoded = 0;
+            self.buf_written -= self.buf_decoded;
+            self.buf_decoded = 0;
+        }
+    }
+
+    async fn read_to_buf(&mut self) -> Result<usize, Error> {
+        if let Some(handle) = self.current.as_ref() {
+            if handle.handle.is_completed() {
+                return if self.buf_written == 0 {
+                    Ok(0)
+                } else {
+                    Err(Error::UnexpectedEof)
+                };
+            }
+        }
+
+        let mut reads = 0;
+        loop {
+            // The lifetime for &mut self is limited to call to read_with(),
+            // but we need a reader that exceeds this lifetime to store
+            // a "current" reference inside the reader, as the active
+            // slice returned from the reader must live between calls to read_with().
+            //
+            // # SAFETY
+            //
+            // We only advance the the reader behind a &mut self
+            let reader = &mut self.reader;
+            let reader = unsafe { core::mem::transmute::<&mut R, &'m mut R>(reader) };
+            let handle = reader.read().await?;
+            reads += 1;
+            self.current = Some(Handle::new(handle));
+
+            let handle = self.current.as_ref().unwrap();
+            let slice = handle.as_slice();
+            let len = slice.len();
+
+            if self.buf_written + len <= self.buf.len() {
+                // This handle can fit entirely in the buffer
+                let offset = self.buf_written;
+                self.buf[offset..offset + len].copy_from_slice(slice);
+                self.buf_written += len;
+
+                if handle.handle.is_completed() {
+                    return Ok(reads)
+                }
+            } else {
+                return Ok(reads)
+            }
         }
     }
 

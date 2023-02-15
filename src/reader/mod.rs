@@ -137,16 +137,9 @@ where
     /// Peek the next byte in the buffer
     async fn peek(&mut self) -> Result<Option<u8>, Error> {
         if self.decoded == 0 {
-            let len = self.source.read(&mut self.buf[self.read..]).await?;
-            if len == 0 {
-                return if self.read == 0 {
-                    Ok(None)
-                } else {
-                    Err(Error::UnexpectedEof)
-                };
+            if self.read_to_buf().await? == 0 {
+                return Ok(None)
             }
-
-            self.read += len;
         }
 
         Ok(Some(self.buf[self.decoded]))
@@ -167,16 +160,9 @@ where
     {
         loop {
             if self.decoded == 0 {
-                let len = self.source.read(&mut self.buf[self.read..]).await?;
-                if len == 0 {
-                    return if self.read == 0 {
-                        Ok(None)
-                    } else {
-                        Err(Error::UnexpectedEof)
-                    };
+                if self.read_to_buf().await? == 0 {
+                    return Ok(None)
                 }
-
-                self.read += len;
             }
 
             // Read an item from the buffer
@@ -195,6 +181,20 @@ where
             self.read -= self.decoded;
             self.decoded = 0;
         }
+    }
+
+    async fn read_to_buf(&mut self) -> Result<usize, Error> {
+        let len = self.source.read(&mut self.buf[self.read..]).await?;
+        if len == 0 {
+            return if self.read == 0 {
+                Ok(0)
+            } else {
+                Err(Error::UnexpectedEof)
+            };
+        }
+
+        self.read += len;
+        Ok(len)
     }
 
     /// Try and decode an item from the decoder.
