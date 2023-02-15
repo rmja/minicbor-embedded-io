@@ -6,9 +6,7 @@ use minicbor::{
 
 const BREAK: u8 = 0xFF;
 
-pub mod direct222;
-mod direct2;
-mod direct;
+pub mod direct;
 
 #[derive(Debug)]
 pub struct CborReader<'b, R>
@@ -24,6 +22,7 @@ where
 #[derive(Debug)]
 pub enum Error {
     UnexpectedEof,
+    BufferTooSmall,
     Io(embedded_io::ErrorKind),
     Decode(decode::Error),
 }
@@ -180,11 +179,15 @@ where
                 self.read += len;
             }
 
+            // Read an item from the buffer
             let mut decoder = Decoder::new(&self.buf[self.decoded..self.read]);
             let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
             if decoded.is_some() {
                 self.decoded += decoder.position();
                 return Ok(decoded);
+            }
+            else if self.decoded == 0 && self.read == self.buf.len() {
+                return Err(Error::BufferTooSmall);
             }
 
             // Remove the decoded values from the buffer by moving the

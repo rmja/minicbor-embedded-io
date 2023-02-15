@@ -1,196 +1,173 @@
+use core::{
+    cell::RefCell,
+    marker::PhantomData,
+};
+
 use embedded_io::asynch::{DirectRead, DirectReadHandle};
-use minicbor::{decode::{ArrayHeader, MapHeader}, Decode, Decoder};
+use futures_intrusive::sync::LocalMutex;
+use minicbor::{Decode, Decoder, decode::ArrayHeader};
 
 use super::Error;
 
-pub struct DirectCborReader<'b, 'm, R>
+pub struct DirectCborReader<'b, R>
 where
     R: DirectRead,
 {
-    reader: R,
-    buf: &'b mut [u8],
-    buf_decoded: usize,
-    read: usize,
-    handle: Option<R::Handle<'m>>,
-    handle_decoded: usize,
+    inner: LocalMutex<Inner<'b>>,
+    reader: PhantomData<R>,
 }
 
-#[derive(Debug)]
+struct Inner<'b> {
+    buf: &'b mut [u8],
+    read: usize,
+    decoded: usize,
+}
+
 pub struct Handle<'m, R>
 where
     R: DirectRead,
 {
-    handle: R::Handle<'m>,
+    source: RefCell<&'m mut R>,
+    pos: usize,
+    handle: Option<R::Handle<'m>>,
 }
 
-pub trait CborArrayReader<C> {
-    fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut C);
-    async fn read_array_item<'b, 'm, R: DirectRead>(
-        &mut self,
-        reader: &'b mut DirectCborReader<'b, 'm, R>,
-        ctx: &mut C,
-    ) -> Result<(), Error> where 'b: 'm;
-}
-
-pub trait CborMapReader<C> {
-    fn read_begin_map(&mut self, len: Option<u64>, ctx: &mut C);
-    async fn read_map_item<'b, 'm, R: DirectRead>(
-        &mut self,
-        reader: &'b mut DirectCborReader<'b, 'm, R>,
-        ctx: &mut C,
-    ) -> Result<(), Error> where 'b: 'm;
-}
-
-impl<'b, R: DirectRead> DirectCborReader<'b, '_, R> {
+impl<'r, R> DirectCborReader<'r, R>
+where
+    R: DirectRead,
+{
     /// Create a new reader
     ///
     /// The provided `buf` must be sufficiently large to contain what corresponds
     /// to one decode item.
-    pub fn new(reader: R, buf: &'b mut [u8]) -> Self {
+    pub fn new(buf: &'r mut [u8]) -> Self {
         Self {
-            reader,
-            buf,
-            buf_decoded: 0,
-            read: 0,
-            handle: None,
-            handle_decoded: 0,
+            inner: LocalMutex::new(
+                Inner {
+                    buf,
+                    read: 0,
+                    decoded: 0,
+                },
+                false,
+            ),
+            reader: PhantomData,
         }
     }
 }
 
-impl<'b, 'm, R> DirectCborReader<'b, 'm, R>
+impl<R> DirectCborReader<'_, R>
 where
     R: DirectRead,
 {
-    pub async fn array<AR: CborArrayReader<()>>(
-        &'m mut self,
-        array_reader: &mut AR,
-    ) -> Result<usize, Error> {
-        self.array_with(array_reader, &mut ()).await
-    }
-
-    pub async fn array_with<C, AR: CborArrayReader<C>>(
-        &'m mut self,
-        array_reader: &mut AR,
-        ctx: &mut C,
-    ) -> Result<usize, Error> where 'b : 'm {
-        todo!();
-        // let mut count = 0;
-        // if let Some(header) = self.read::<ArrayHeader>().await? {
-        //     let len = header.0;
-        //     array_reader.read_begin_array(len, ctx);
-        //     if let Some(len) = len {
-        //         for _ in 0..len {
-        //             array_reader.read_array_item(self, ctx).await?;
-        //         }
-        //         count = len as usize;
-        //     } else {
-        //         todo!();
-        //         // while self.peek().await?.ok_or(Error::UnexpectedEof)? != BREAK {
-        //         //     array_reader.read_array_item(self, ctx).await?;
-        //         //     count += 1;
-        //         // }
-        //     }
-        // }
-
-        // Ok(count)
-    }
-
-    pub async fn map<MR: CborMapReader<()>>(
-        &'m mut self,
-        map_reader: &mut MR,
-    ) -> Result<usize, Error> {
-        self.map_with(map_reader, &mut ()).await
-    }
-
-    pub async fn map_with<C, MR: CborMapReader<C>>(
-        &'m mut self,
-        map_reader: &mut MR,
-        ctx: &mut C,
-    ) -> Result<usize, Error> {
-        todo!();
-        // let mut count = 0;
-        // if let Some(header) = self.read::<MapHeader>().await? {
-        //     let len = header.0;
-        //     map_reader.read_begin_map(len, ctx);
-        //     if let Some(len) = len {
-        //         for _ in 0..len {
-        //             map_reader.read_map_item(self, ctx).await?;
-        //         }
-        //         count = len as usize;
-        //     } else {
-        //         todo!();
-        //         // while self.peek().await?.ok_or(Error::UnexpectedEof)? != BREAK {
-        //         //     map_reader.read_map_item(self, ctx).await?;
-        //         //     count += 1;
-        //         // }
-        //     }
-        // }
-
-        // Ok(count)
+    pub fn new_handle<'m>(&self, source: &'m mut R) -> Handle<'m, R> {
+        Handle {
+            source: RefCell::new(source),
+            pos: 0,
+            handle: None,
+        }
     }
 
     /// Read the next CBOR value and decode it
-    pub async fn read<T>(&'m mut self) -> Result<Option<T>, Error>
+    pub async fn read<'m, T>(&self, handle: &mut Handle<'m, R>) -> Result<Option<T>, Error>
     where
         for<'a> T: Decode<'a, ()>,
     {
-        self.read_with(&mut ()).await
+        self.read_with(handle, &mut ()).await
     }
 
     /// Like [`CborReader::read`] but accepting a user provided decoding context.
-    pub async fn read_with<C, T>(&'m mut self, ctx: &mut C) -> Result<Option<T>, Error>
+    pub async fn read_with<'m, C, T>(
+        &self,
+        handle: &mut Handle<'m, R>,
+        ctx: &mut C,
+    ) -> Result<Option<T>, Error>
     where
         for<'a> T: Decode<'a, C>,
     {
-        if self.buf_decoded == 0 {
-            if let Some(handle) = self.handle.as_ref() {
-                if handle.is_completed() {
-                    return if self.read == 0 {
-                        Ok(None)
+        let mut inner = self.inner.try_lock().unwrap();
+
+        loop {
+            if inner.decoded == 0 {
+                if let Some(handle) = handle.handle.as_ref() {
+                    if handle.is_completed() {
+                        return if inner.read == 0 {
+                            Ok(None)
+                        } else {
+                            Err(Error::UnexpectedEof)
+                        };
+                    }
+                }
+
+                loop {
+                    let handle = handle.advance_source().await?;
+                    let slice = handle.as_slice();
+                    let len = slice.len();
+
+                    if inner.read + len <= inner.buf.len() {
+                        // This handle can fit entirely in the buffer
+                        let offset = inner.read;
+                        inner.buf[offset..offset + len].copy_from_slice(slice);
+                        inner.read += len;
+
+                        if handle.is_completed() {
+                            break;
+                        }
                     } else {
-                        Err(Error::UnexpectedEof)
-                    };
+                        break;
+                    }
                 }
             }
 
-            let (buffered, handle) =
-                read_to_buf(&mut self.reader, &mut self.buf[self.read..]).await?;
-            self.read += buffered;
-            self.handle = Some(handle);
-
-            // We have buffered as much as possible - the returned handle is either the last or could not fit in the buffer
-
-            if self.read > 0 {
-                // Copy from the handle to the buffer so that we can decode exactly one item
-                let unused = self.buf.len() - self.read;
-                let handle_slice = self.handle.as_ref().unwrap().as_slice();
-                let to_copy = usize::min(unused, handle_slice.len());
-
-                self.buf[self.read..self.read + to_copy].copy_from_slice(&handle_slice[..to_copy]);
-                let mut decoder = Decoder::new(&self.buf[..self.read]);
-                let decoded = Self::try_decode_with(&mut decoder, ctx)?;
+            // First, try and read an item from the buffer
+            let mut decoder = Decoder::new(&inner.buf[inner.decoded..inner.read]);
+            let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
+            if decoded.is_some() {
+                inner.decoded += decoder.position();
                 return Ok(decoded);
             }
+
+            let handle_slice = handle.as_slice();
+            if !handle_slice.is_empty() {
+                // Second, try and read from between buffer and active handle
+                if inner.read > 0 {
+                    // "borrow" from the current active handle so that we try to read a single item
+                    // that spans between the buffer and the handle
+                    let unused = inner.buf.len() - inner.read;
+                    let to_copy = usize::min(unused, handle_slice.len());
+
+                    let pos = inner.read;
+                    inner.buf[pos..pos + to_copy].copy_from_slice(&handle_slice[..to_copy]);
+
+                    let mut decoder = Decoder::new(&inner.buf[..inner.read]);
+                    let decoded =
+                        Self::try_decode_with(&mut decoder, ctx)?.ok_or(Error::BufferTooSmall)?;
+
+                    handle.pos = decoder.position() - inner.decoded;
+                    inner.read = 0;
+
+                    return Ok(Some(decoded));
+                }
+
+                // Third, read from the active handle
+                let mut decoder = Decoder::new(&handle_slice[handle.pos..]);
+                let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
+                if decoded.is_some() {
+                    handle.pos += decoder.position();
+                    return Ok(decoded);
+                }
+
+                // Save the unused bytes from the active handle into the buffer
+                let to_copy = handle_slice.len() - handle.pos;
+                if to_copy > inner.buf.len() {
+                    return Err(Error::BufferTooSmall);
+                }
+                inner.buf[..to_copy].copy_from_slice(&handle_slice[handle.pos..]);
+                inner.read += to_copy;
+            }
+
+            inner.read -= inner.decoded;
+            inner.decoded = 0;
         }
-
-        let handle = self.handle.as_ref().unwrap();
-        let handle_slice = handle.as_slice();
-
-        // Decode directly from the handle slice
-        let mut decoder = Decoder::new(&handle.as_slice()[self.buf_decoded..]);
-        let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
-        if decoded.is_some() {
-            self.buf_decoded += decoder.position();
-            return Ok(decoded);
-        }
-
-        // Copy the unused bytes from the handle to the buffer
-        let carry = handle_slice.len() - self.buf_decoded;
-        self.buf.copy_from_slice(&handle_slice[self.buf_decoded..]);
-        self.read = carry;
-        self.buf_decoded = 0;
-        todo!();
     }
 
     /// Try and decode an item from the decoder.
@@ -208,67 +185,60 @@ where
     }
 }
 
-async fn read_to_buf<'r, 'm, R: DirectRead>(
-    reader: &'r mut R,
-    buf: &mut [u8],
-) -> Result<(usize, R::Handle<'m>), Error>
+impl<'m, R> Handle<'m, R>
 where
-    'r: 'm,
+    R: DirectRead,
 {
-    let mut pos = 0;
-    // loop {
-        let handle = reader.read().await?;
-        let slice = handle.as_slice();
-        let len = slice.len();
-
-        if pos + len <= buf.len() {
-            buf[pos..pos + len].copy_from_slice(slice);
-            pos += len;
-            return Err(Error::UnexpectedEof);
-        } else {
-            return Ok((pos, handle));
-        }
-    // }
-}
-
-#[cfg(feature = "alloc")]
-impl<T, A: core::alloc::Allocator> CborArrayReader<()> for alloc::vec::Vec<T, A>
-where
-    for<'b> T: Decode<'b, ()>,
-{
-    fn read_begin_array(&mut self, len: Option<u64>, _ctx: &mut ()) {
-        if let Some(len) = len {
-            self.reserve_exact(len as usize);
-        }
+    async fn advance_source(&mut self) -> Result<&mut R::Handle<'m>, Error> {
+        let mut source = self.source.borrow_mut();
+        let source = unsafe { core::mem::transmute::<&mut R, &mut R>(&mut source) };
+        self.handle = Some(source.read().await?);
+        Ok(self.handle.as_mut().unwrap())
     }
 
-    async fn read_array_item<'b, 'm, R: DirectRead>(
-        &mut self,
-        reader: &'b mut DirectCborReader<'b, 'm, R>,
-        _ctx: &mut (),
-    ) -> Result<(), Error> where 'b: 'm {
-        if let Some(item) = reader.read::<T>().await? {
-            self.push(item);
-        }
-
-        Ok(())
+    fn as_slice(&self) -> &[u8] {
+        self.handle.as_ref().unwrap().as_slice()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    #[cfg(feature = "alloc")]
+
     #[tokio::test]
-    async fn can_read_with_vec() {
+    async fn can_read_manually() {
         let mut buf = [0; 16];
         let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = DirectCborReader::new(cbor.as_slice(), &mut buf);
-    
-        let mut vec = Vec::new();
-        reader.array(&mut vec).await.unwrap();
+        let reader = DirectCborReader::new(&mut buf);
+        let mut source = cbor.as_slice();
+        let mut handle = reader.new_handle(&mut source);
+        assert_eq!(
+            3,
+            reader
+                .read::<ArrayHeader>(&mut handle)
+                .await
+                .unwrap()
+                .unwrap()
+                .0
+                .unwrap()
+        );
 
-        assert_eq!(&[1, 2, 3], vec.as_slice());
+        assert_eq!(1, reader.read::<u8>(&mut handle).await.unwrap().unwrap());
+        assert_eq!(2, reader.read::<u8>(&mut handle).await.unwrap().unwrap());
+        assert_eq!(3, reader.read::<u8>(&mut handle).await.unwrap().unwrap());
+        assert!(reader.read::<u8>(&mut handle).await.unwrap().is_none());
     }
+
+    // #[cfg(feature = "alloc")]
+    // #[tokio::test]
+    // async fn can_read_with_vec() {
+    //     let mut buf = [0; 16];
+    //     let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
+    //     let mut reader = DirectCborReader::new(cbor.as_slice(), &mut buf);
+
+    //     let mut vec = Vec::new();
+    //     reader.array(&mut vec).await.unwrap();
+
+    //     assert_eq!(&[1, 2, 3], vec.as_slice());
+    // }
 }
