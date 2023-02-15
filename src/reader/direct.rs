@@ -1,10 +1,5 @@
-use core::{
-    marker::PhantomData,
-};
-
 use embedded_io::asynch::{DirectRead, DirectReadHandle};
-use futures_intrusive::sync::LocalMutex;
-use minicbor::{Decode, Decoder, decode::ArrayHeader};
+use minicbor::{decode::ArrayHeader, Decode, Decoder};
 
 use super::Error;
 
@@ -16,16 +11,15 @@ where
     read: usize,
     decoded: usize,
     reader: R,
-    handle: Handle<'m, R>,
+    current: Option<Handle<'m, R>>,
 }
 
 pub struct Handle<'m, R>
 where
     R: DirectRead,
 {
-    // source: LocalMutex<&'m mut R>,
     pos: usize,
-    handle: Option<R::Handle<'m>>,
+    handle: R::Handle<'m>,
 }
 
 impl<'r, 'm, R> DirectCborReader<'r, 'm, R>
@@ -42,11 +36,7 @@ where
             read: 0,
             decoded: 0,
             reader: source,
-            handle: Handle {
-                // source: LocalMutex::new(source, false),
-                pos: 0,
-                handle: None,
-            }
+            current: None,
         }
     }
 }
@@ -64,17 +54,14 @@ where
     }
 
     /// Like [`CborReader::read`] but accepting a user provided decoding context.
-    pub async fn read_with<C, T>(
-        &mut self,
-        ctx: &mut C,
-    ) -> Result<Option<T>, Error>
+    pub async fn read_with<C, T>(&mut self, ctx: &mut C) -> Result<Option<T>, Error>
     where
         for<'a> T: Decode<'a, C>,
     {
         loop {
             if self.decoded == 0 {
-                if let Some(handle) = self.handle.handle.as_ref() {
-                    if handle.is_completed() {
+                if let Some(handle) = self.current.as_ref() {
+                    if handle.handle.is_completed() {
                         return if self.read == 0 {
                             Ok(None)
                         } else {
@@ -84,7 +71,8 @@ where
                 }
 
                 loop {
-                    let handle = self.handle.advance_from(&mut self.reader).await?;
+                    self.current = Some(Handle::from(&mut self.reader).await?);
+                    let handle = self.current.as_ref().unwrap();
                     let slice = handle.as_slice();
                     let len = slice.len();
 
@@ -94,7 +82,7 @@ where
                         self.buf[offset..offset + len].copy_from_slice(slice);
                         self.read += len;
 
-                        if handle.is_completed() {
+                        if handle.handle.is_completed() {
                             break;
                         }
                     } else {
@@ -102,6 +90,8 @@ where
                     }
                 }
             }
+
+            let current = self.current.as_mut().unwrap();
 
             // First, try and read an item from the buffer
             let mut decoder = Decoder::new(&self.buf[self.decoded..self.read]);
@@ -111,7 +101,7 @@ where
                 return Ok(decoded);
             }
 
-            let handle_slice = self.handle.as_slice();
+            let handle_slice = current.as_slice();
             if !handle_slice.is_empty() {
                 // Second, try and read from between buffer and active handle
                 if self.read > 0 {
@@ -127,26 +117,26 @@ where
                     let decoded =
                         Self::try_decode_with(&mut decoder, ctx)?.ok_or(Error::BufferTooSmall)?;
 
-                    self.handle.pos = decoder.position() - self.decoded;
+                    current.pos = decoder.position() - self.decoded;
                     self.read = 0;
 
                     return Ok(Some(decoded));
                 }
 
                 // Third, read from the active handle
-                let mut decoder = Decoder::new(&handle_slice[self.handle.pos..]);
+                let mut decoder = Decoder::new(&handle_slice[current.pos..]);
                 let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
                 if decoded.is_some() {
-                    self.handle.pos += decoder.position();
+                    current.pos += decoder.position();
                     return Ok(decoded);
                 }
 
                 // Save the unused bytes from the active handle into the buffer
-                let to_copy = handle_slice.len() - self.handle.pos;
+                let to_copy = handle_slice.len() - current.pos;
                 if to_copy > self.buf.len() {
                     return Err(Error::BufferTooSmall);
                 }
-                self.buf[..to_copy].copy_from_slice(&handle_slice[self.handle.pos..]);
+                self.buf[..to_copy].copy_from_slice(&handle_slice[current.pos..]);
                 self.read += to_copy;
             }
 
@@ -174,14 +164,15 @@ impl<'m, R> Handle<'m, R>
 where
     R: DirectRead + 'm,
 {
-    async fn advance_from(&mut self, source: &mut R) -> Result<&mut R::Handle<'m>, Error> {
+    async fn from(source: &mut R) -> Result<Handle<'m, R>, Error> {
         let source = unsafe { core::mem::transmute::<&mut R, &mut R>(source) };
-        self.handle = Some(source.read().await?);
-        Ok(self.handle.as_mut().unwrap())
+        let handle = source.read().await?;
+
+        Ok(Handle { pos: 0, handle })
     }
 
     fn as_slice(&self) -> &[u8] {
-        self.handle.as_ref().unwrap().as_slice()
+        self.handle.as_slice()
     }
 }
 
