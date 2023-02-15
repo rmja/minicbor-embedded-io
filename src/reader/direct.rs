@@ -1,5 +1,4 @@
 use core::{
-    cell::RefCell,
     marker::PhantomData,
 };
 
@@ -27,7 +26,7 @@ pub struct Handle<'m, R>
 where
     R: DirectRead,
 {
-    source: RefCell<&'m mut R>,
+    source: LocalMutex<&'m mut R>,
     pos: usize,
     handle: Option<R::Handle<'m>>,
 }
@@ -61,7 +60,7 @@ where
 {
     pub fn new_handle<'m>(&self, source: &'m mut R) -> Handle<'m, R> {
         Handle {
-            source: RefCell::new(source),
+            source: LocalMutex::new(source, false),
             pos: 0,
             handle: None,
         }
@@ -190,7 +189,7 @@ where
     R: DirectRead,
 {
     async fn advance_source(&mut self) -> Result<&mut R::Handle<'m>, Error> {
-        let mut source = self.source.borrow_mut();
+        let mut source = self.source.try_lock().unwrap();
         let source = unsafe { core::mem::transmute::<&mut R, &mut R>(&mut source) };
         self.handle = Some(source.read().await?);
         Ok(self.handle.as_mut().unwrap())
