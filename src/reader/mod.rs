@@ -6,18 +6,8 @@ use minicbor::{
 
 const BREAK: u8 = 0xFF;
 
+mod asynch;
 pub mod direct;
-
-#[derive(Debug)]
-pub struct CborReader<'b, R>
-where
-    R: Read,
-{
-    source: R,
-    buf: &'b mut [u8],
-    read: usize,
-    decoded: usize,
-}
 
 #[derive(Debug)]
 pub enum Error {
@@ -35,53 +25,41 @@ impl<T: embedded_io::Error> From<T> for Error {
 
 pub trait CborArrayReader<C> {
     fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut C);
-    async fn read_array_item<'b, R: Read>(
+    async fn read_array_item<R: CborReader>(
         &mut self,
-        reader: &mut CborReader<'b, R>,
+        reader: &mut R,
         ctx: &mut C,
     ) -> Result<(), Error>;
 }
 
 pub trait CborMapReader<C> {
     fn read_begin_map(&mut self, len: Option<u64>, ctx: &mut C);
-    async fn read_map_item<'b, R: Read>(
+    async fn read_map_item<R: CborReader>(
         &mut self,
-        reader: &mut CborReader<'b, R>,
+        reader: &mut R,
         ctx: &mut C,
     ) -> Result<(), Error>;
 }
 
-impl<'b, R: Read> CborReader<'b, R> {
-    /// Create a new reader
-    ///
-    /// The provided `buf` must be sufficiently large to contain what corresponds
-    /// to one decode item.
-    pub fn new(source: R, buf: &'b mut [u8]) -> Self {
-        Self {
-            source,
-            buf,
-            read: 0,
-            decoded: 0,
-        }
-    }
-}
-
-impl<R> CborReader<'_, R>
-where
-    R: Read,
-{
-    pub async fn array<AR: CborArrayReader<()>>(
+pub trait CborReader {
+    async fn array<AR: CborArrayReader<()>>(
         &mut self,
         array_reader: &mut AR,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, Error>
+    where
+        Self: Sized,
+    {
         self.array_with(array_reader, &mut ()).await
     }
 
-    pub async fn array_with<C, AR: CborArrayReader<C>>(
+    async fn array_with<C, AR: CborArrayReader<C>>(
         &mut self,
         array_reader: &mut AR,
         ctx: &mut C,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, Error>
+    where
+        Self: Sized,
+    {
         let mut count = 0;
         if let Some(header) = self.read::<ArrayHeader>().await? {
             let len = header.0;
@@ -102,18 +80,21 @@ where
         Ok(count)
     }
 
-    pub async fn map<MR: CborMapReader<()>>(
-        &mut self,
-        map_reader: &mut MR,
-    ) -> Result<usize, Error> {
+    async fn map<MR: CborMapReader<()>>(&mut self, map_reader: &mut MR) -> Result<usize, Error>
+    where
+        Self: Sized,
+    {
         self.map_with(map_reader, &mut ()).await
     }
 
-    pub async fn map_with<C, MR: CborMapReader<C>>(
+    async fn map_with<C, MR: CborMapReader<C>>(
         &mut self,
         map_reader: &mut MR,
         ctx: &mut C,
-    ) -> Result<usize, Error> {
+    ) -> Result<usize, Error>
+    where
+        Self: Sized,
+    {
         let mut count = 0;
         if let Some(header) = self.read::<MapHeader>().await? {
             let len = header.0;
@@ -134,19 +115,8 @@ where
         Ok(count)
     }
 
-    /// Peek the next byte in the buffer
-    async fn peek(&mut self) -> Result<Option<u8>, Error> {
-        if self.decoded == 0 {
-            if self.read_to_buf().await? == 0 {
-                return Ok(None)
-            }
-        }
-
-        Ok(Some(self.buf[self.decoded]))
-    }
-
     /// Read the next CBOR value and decode it
-    pub async fn read<T>(&mut self) -> Result<Option<T>, Error>
+    async fn read<T>(&mut self) -> Result<Option<T>, Error>
     where
         for<'a> T: Decode<'a, ()>,
     {
@@ -154,62 +124,12 @@ where
     }
 
     /// Like [`CborReader::read`] but accepting a user provided decoding context.
-    pub async fn read_with<C, T>(&mut self, ctx: &mut C) -> Result<Option<T>, Error>
+    async fn read_with<C, T>(&mut self, ctx: &mut C) -> Result<Option<T>, Error>
     where
-        for<'a> T: Decode<'a, C>,
-    {
-        loop {
-            if self.decoded == 0 {
-                if self.read_to_buf().await? == 0 {
-                    return Ok(None)
-                }
-            }
+        for<'a> T: Decode<'a, C>;
 
-            // Read an item from the buffer
-            let mut decoder = Decoder::new(&self.buf[self.decoded..self.read]);
-            let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
-            if decoded.is_some() {
-                self.decoded += decoder.position();
-                return Ok(decoded);
-            } else if self.decoded == 0 && self.read == self.buf.len() {
-                return Err(Error::BufferTooSmall);
-            }
-
-            // Remove the decoded values from the buffer by moving the
-            // remaining, unused bytes in the buffer to the beginning
-            self.buf.copy_within(self.decoded..self.read, 0);
-            self.read -= self.decoded;
-            self.decoded = 0;
-        }
-    }
-
-    async fn read_to_buf(&mut self) -> Result<usize, Error> {
-        let len = self.source.read(&mut self.buf[self.read..]).await?;
-        if len == 0 {
-            return if self.read == 0 {
-                Ok(0)
-            } else {
-                Err(Error::UnexpectedEof)
-            };
-        }
-
-        self.read += len;
-        Ok(len)
-    }
-
-    /// Try and decode an item from the decoder.
-    /// Ignore end-of-input error as that, for now, signifies that we need to read more bytes
-    /// from the underlying reader.
-    fn try_decode_with<'a, C, T: Decode<'a, C>>(
-        decoder: &mut Decoder<'a>,
-        ctx: &mut C,
-    ) -> Result<Option<T>, Error> {
-        match decoder.decode_with(ctx) {
-            Ok(decoded) => Ok(Some(decoded)),
-            Err(e) if e.is_end_of_input() => Ok(None),
-            Err(e) => Err(Error::Decode(e)),
-        }
-    }
+    /// Peek the next byte
+    async fn peek(&mut self) -> Result<Option<u8>, Error>;
 }
 
 #[cfg(feature = "alloc")]
@@ -223,9 +143,9 @@ where
         }
     }
 
-    async fn read_array_item<'b, R: Read>(
+    async fn read_array_item<R: CborReader>(
         &mut self,
-        reader: &mut CborReader<'b, R>,
+        reader: &mut R,
         _ctx: &mut (),
     ) -> Result<(), Error> {
         if let Some(item) = reader.read::<T>().await? {
@@ -233,101 +153,5 @@ where
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use minicbor::decode::ArrayHeader;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn can_read_manually() {
-        let mut buf = [0; 16];
-        let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
-        assert_eq!(
-            3,
-            reader
-                .read::<ArrayHeader>()
-                .await
-                .unwrap()
-                .unwrap()
-                .0
-                .unwrap()
-        );
-
-        assert_eq!(1, reader.read::<u8>().await.unwrap().unwrap());
-        assert_eq!(2, reader.read::<u8>().await.unwrap().unwrap());
-        assert_eq!(3, reader.read::<u8>().await.unwrap().unwrap());
-        assert!(reader.read::<u8>().await.unwrap().is_none());
-    }
-
-    #[cfg(feature = "alloc")]
-    #[tokio::test]
-    async fn can_read_with_vec() {
-        let mut buf = [0; 16];
-        let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
-
-        let mut vec = Vec::new();
-        reader.array(&mut vec).await.unwrap();
-
-        assert_eq!(&[1, 2, 3], vec.as_slice());
-    }
-
-    struct TestArrayReader;
-
-    impl CborArrayReader<Vec<u8>> for TestArrayReader {
-        fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut Vec<u8>) {
-            if let Some(len) = len {
-                ctx.reserve_exact(len as usize);
-            }
-        }
-
-        async fn read_array_item<'b, R: Read>(
-            &mut self,
-            reader: &mut CborReader<'b, R>,
-            ctx: &mut Vec<u8>,
-        ) -> Result<(), Error> {
-            if let Some(item) = reader.read::<u8>().await? {
-                ctx.push(item);
-            }
-
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn can_read_fixed_array() {
-        let mut buf = [0; 16];
-        let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
-
-        let mut array_reader = TestArrayReader;
-        let mut ctx = Vec::new();
-        reader
-            .array_with(&mut array_reader, &mut ctx)
-            .await
-            .unwrap();
-
-        assert_eq!(&[1, 2, 3], ctx.as_slice());
-    }
-
-    #[tokio::test]
-    async fn can_read_inf_array() {
-        let mut buf = [0; 16];
-        let cbor: [u8; 5] = [0x9F, 0x01, 0x02, 0x03, 0xFF];
-        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
-
-        let mut array_reader = TestArrayReader;
-        let mut ctx = Vec::new();
-        reader
-            .array_with(&mut array_reader, &mut ctx)
-            .await
-            .unwrap();
-
-        assert_eq!(&[1, 2, 3], ctx.as_slice());
     }
 }

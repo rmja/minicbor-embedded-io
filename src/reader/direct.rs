@@ -49,7 +49,7 @@ where
     async fn peek(&mut self) -> Result<Option<u8>, Error> {
         if self.buf_decoded == 0 {
             if self.read_to_buf().await? == 0 {
-                return Ok(None)
+                return Ok(None);
             }
         }
 
@@ -82,7 +82,7 @@ where
         loop {
             if self.buf_decoded == 0 {
                 if self.read_to_buf().await? == 0 {
-                    return Ok(None)
+                    return Ok(None);
                 }
             }
 
@@ -179,10 +179,10 @@ where
                 self.buf_written += len;
 
                 if handle.handle.is_completed() {
-                    return Ok(reads)
+                    return Ok(reads);
                 }
             } else {
-                return Ok(reads)
+                return Ok(reads);
             }
         }
     }
