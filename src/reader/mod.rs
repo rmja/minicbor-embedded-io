@@ -1,13 +1,15 @@
-use embedded_io::asynch::Read;
 use minicbor::{
     decode::{self, ArrayHeader, MapHeader},
-    Decode, Decoder,
+    Decode,
 };
 
 const BREAK: u8 = 0xFF;
 
 mod asynch;
-pub mod direct;
+mod direct;
+
+pub use asynch::*;
+pub use direct::*;
 
 #[derive(Debug)]
 pub enum Error {

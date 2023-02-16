@@ -30,7 +30,7 @@ where
     ///
     /// The provided `buf` must be sufficiently large to contain what corresponds
     /// to one decode item.
-    pub fn new(buf: &'r mut [u8], source: R) -> Self {
+    pub fn new(source: R, buf: &'r mut [u8]) -> Self {
         Self {
             buf,
             buf_written: 0,
@@ -224,7 +224,7 @@ mod tests {
         let mut buf = [0; 16];
         let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
         let source = cbor.as_slice();
-        let mut reader = DirectCborReader::new(&mut buf, source);
+        let mut reader = DirectCborReader::new(source, &mut buf);
         assert_eq!(
             3,
             reader
