@@ -24,7 +24,7 @@ pub trait CborArrayReader<C> {
     fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut C);
     async fn read_array_item<'b, R: Read>(
         &mut self,
-        reader: &mut AsyncCborReader<'b, R>,
+        reader: &mut CborReader<'b, R>,
         ctx: &mut C,
     ) -> Result<(), Error>;
 }
@@ -33,13 +33,13 @@ pub trait CborMapReader<C> {
     fn read_begin_map(&mut self, len: Option<u64>, ctx: &mut C);
     async fn read_map_item<'b, R: Read>(
         &mut self,
-        reader: &mut AsyncCborReader<'b, R>,
+        reader: &mut CborReader<'b, R>,
         ctx: &mut C,
     ) -> Result<(), Error>;
 }
 
 #[derive(Debug)]
-pub struct AsyncCborReader<'b, R>
+pub struct CborReader<'b, R>
 where
     R: Read,
 {
@@ -49,7 +49,7 @@ where
     decoded: usize,
 }
 
-impl<'b, R: Read> AsyncCborReader<'b, R> {
+impl<'b, R: Read> CborReader<'b, R> {
     /// Create a new reader
     ///
     /// The provided `buf` must be sufficiently large to contain what corresponds
@@ -154,10 +154,8 @@ impl<'b, R: Read> AsyncCborReader<'b, R> {
         for<'a> T: Decode<'a, C>,
     {
         loop {
-            if self.decoded == 0 {
-                if self.read_to_buf().await? == 0 {
-                    return Ok(None);
-                }
+            if self.decoded == 0 && self.read_to_buf().await? == 0 {
+                return Ok(None);
             }
 
             // Read an item from the buffer
@@ -180,10 +178,8 @@ impl<'b, R: Read> AsyncCborReader<'b, R> {
 
     /// Peek the next byte in the buffer
     async fn peek(&mut self) -> Result<Option<u8>, Error> {
-        if self.decoded == 0 {
-            if self.read_to_buf().await? == 0 {
-                return Ok(None);
-            }
+        if self.decoded == 0 && self.read_to_buf().await? == 0 {
+            return Ok(None);
         }
 
         Ok(Some(self.buf[self.decoded]))
@@ -231,7 +227,7 @@ where
 
     async fn read_array_item<'b, R: Read>(
         &mut self,
-        reader: &mut AsyncCborReader<'b, R>,
+        reader: &mut CborReader<'b, R>,
         _ctx: &mut (),
     ) -> Result<(), Error> {
         if let Some(item) = reader.read::<T>().await? {
@@ -254,7 +250,7 @@ mod tests {
     async fn can_read_manually() {
         let mut buf = [0; 16];
         let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = AsyncCborReader::new(cbor.as_slice(), &mut buf);
+        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
         assert_eq!(
             3,
             reader
@@ -277,7 +273,7 @@ mod tests {
     async fn can_read_with_vec() {
         let mut buf = [0; 16];
         let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = AsyncCborReader::new(cbor.as_slice(), &mut buf);
+        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
 
         let mut vec = Vec::new();
         reader.array(&mut vec).await.unwrap();
@@ -296,7 +292,7 @@ mod tests {
 
         async fn read_array_item<'b, R: Read>(
             &mut self,
-            reader: &mut AsyncCborReader<'b, R>,
+            reader: &mut CborReader<'b, R>,
             ctx: &mut Vec<u8>,
         ) -> Result<(), Error> {
             if let Some(item) = reader.read::<u8>().await? {
@@ -311,7 +307,7 @@ mod tests {
     async fn can_read_fixed_array() {
         let mut buf = [0; 16];
         let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
-        let mut reader = AsyncCborReader::new(cbor.as_slice(), &mut buf);
+        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
 
         let mut array_reader = TestArrayReader;
         let mut ctx = Vec::new();
@@ -327,7 +323,7 @@ mod tests {
     async fn can_read_inf_array() {
         let mut buf = [0; 16];
         let cbor: [u8; 5] = [0x9F, 0x01, 0x02, 0x03, 0xFF];
-        let mut reader = AsyncCborReader::new(cbor.as_slice(), &mut buf);
+        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
 
         let mut array_reader = TestArrayReader;
         let mut ctx = Vec::new();
