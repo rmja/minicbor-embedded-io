@@ -5,5 +5,7 @@
 
 pub mod reader;
 
+pub use minicbor;
+
 #[cfg(feature = "alloc")]
 extern crate alloc;
