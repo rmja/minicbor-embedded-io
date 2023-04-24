@@ -4,6 +4,7 @@
 #![cfg_attr(feature = "alloc", feature(allocator_api))]
 
 pub mod reader;
+pub mod writer;
 
 pub use minicbor;
 

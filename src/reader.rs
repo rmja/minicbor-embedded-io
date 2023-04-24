@@ -14,6 +14,16 @@ pub enum Error {
     Decode(decode::Error),
 }
 
+#[cfg(feature = "defmt")]
+impl defmt::Format for Error {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            Error::Decode(_) => defmt::write!(f, "Decode"),
+            error => defmt::Format::format(error, f),
+        }
+    }
+}
+
 impl<T: embedded_io::Error> From<T> for Error {
     fn from(value: T) -> Self {
         Error::Io(value.kind())
