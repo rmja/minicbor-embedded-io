@@ -31,7 +31,8 @@ impl<T: embedded_io::Error> From<T> for Error {
 }
 
 pub trait CborArrayReader<C> {
-    fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut C);
+    fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut C) -> Result<(), Error>;
+
     async fn read_array_item<'b, R: Read>(
         &mut self,
         reader: &mut CborReader<'b, R>,
@@ -40,7 +41,8 @@ pub trait CborArrayReader<C> {
 }
 
 pub trait CborMapReader<C> {
-    fn read_begin_map(&mut self, len: Option<u64>, ctx: &mut C);
+    fn read_begin_map(&mut self, len: Option<u64>, ctx: &mut C) -> Result<(), Error>;
+
     async fn read_map_item<'b, R: Read>(
         &mut self,
         reader: &mut CborReader<'b, R>,
@@ -96,7 +98,7 @@ impl<'b, R: Read> CborReader<'b, R> {
         let mut count = 0;
         if let Some(header) = self.read::<ArrayHeader>().await? {
             let len = header.0;
-            array_reader.read_begin_array(len, ctx);
+            array_reader.read_begin_array(len, ctx)?;
             if let Some(len) = len {
                 for _ in 0..len {
                     array_reader.read_array_item(self, ctx).await?;
@@ -133,7 +135,7 @@ impl<'b, R: Read> CborReader<'b, R> {
         let mut count = 0;
         if let Some(header) = self.read::<MapHeader>().await? {
             let len = header.0;
-            map_reader.read_begin_map(len, ctx);
+            map_reader.read_begin_map(len, ctx)?;
             if let Some(len) = len {
                 for _ in 0..len {
                     map_reader.read_map_item(self, ctx).await?;
@@ -229,10 +231,13 @@ impl<T, A: core::alloc::Allocator> CborArrayReader<()> for alloc::vec::Vec<T, A>
 where
     for<'b> T: Decode<'b, ()>,
 {
-    fn read_begin_array(&mut self, len: Option<u64>, _ctx: &mut ()) {
+    fn read_begin_array(&mut self, len: Option<u64>, _ctx: &mut ()) -> Result<(), Error> {
         if let Some(len) = len {
-            self.reserve_exact(len as usize);
+            self.try_reserve_exact(len as usize)
+                .map_err(|_| Error::BufferTooSmall)?;
         }
+
+        Ok(())
     }
 
     async fn read_array_item<'b, R: Read>(
@@ -294,10 +299,12 @@ mod tests {
     struct TestArrayReader;
 
     impl CborArrayReader<Vec<u8>> for TestArrayReader {
-        fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut Vec<u8>) {
+        fn read_begin_array(&mut self, len: Option<u64>, ctx: &mut Vec<u8>) -> Result<(), Error> {
             if let Some(len) = len {
                 ctx.reserve_exact(len as usize);
             }
+
+            Ok(())
         }
 
         async fn read_array_item<'b, R: Read>(
