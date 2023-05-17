@@ -12,6 +12,8 @@ pub enum Error {
     BufferTooSmall,
     Io(embedded_io::ErrorKind),
     Decode(decode::Error),
+    #[cfg(feature = "alloc")]
+    TryReserveError,
 }
 
 #[cfg(feature = "defmt")]
@@ -171,7 +173,12 @@ impl<'b, R: Read> CborReader<'b, R> {
             }
 
             // Read an item from the buffer
-            let mut decoder = Decoder::new(&self.buf[self.decoded..self.read]);
+            let bytes = &self.buf[self.decoded..self.read];
+
+            #[cfg(feature = "defmt")]
+            defmt::trace!("Decoder item bytes: {:02x}", bytes);
+
+            let mut decoder = Decoder::new(bytes);
             let decoded: Option<T> = Self::try_decode_with(&mut decoder, ctx)?;
             if decoded.is_some() {
                 self.decoded += decoder.position();
@@ -234,7 +241,7 @@ where
     fn read_begin_array(&mut self, len: Option<u64>, _ctx: &mut ()) -> Result<(), Error> {
         if let Some(len) = len {
             self.try_reserve_exact(len as usize)
-                .map_err(|_| Error::BufferTooSmall)?;
+                .map_err(|_| Error::TryReserveError)?;
         }
 
         Ok(())
@@ -246,6 +253,7 @@ where
         _ctx: &mut (),
     ) -> Result<(), Error> {
         if let Some(item) = reader.read::<T>().await? {
+            self.try_reserve(1).map_err(|_| Error::TryReserveError)?;
             self.push(item);
         }
 
