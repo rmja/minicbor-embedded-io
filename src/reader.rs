@@ -1,3 +1,5 @@
+use core::marker::PhantomData;
+
 use embedded_io::asynch::Read;
 use minicbor::{
     decode::{self, ArrayHeader, MapHeader},
@@ -259,6 +261,44 @@ where
 
         Ok(())
     }
+}
+
+pub struct MapEntryReader<T: for<'b> MapEntryDecode<'b>> {
+    entry_decode: PhantomData<T>,
+}
+
+impl<T: for<'b> MapEntryDecode<'b>> MapEntryReader<T> {
+    pub fn new() -> Self {
+        Self {
+            entry_decode: PhantomData,
+        }
+    }
+}
+
+impl<T: for<'b> MapEntryDecode<'b>> CborMapReader<T> for MapEntryReader<T> {
+    fn read_begin_map(&mut self, _len: Option<u64>, _ctx: &mut T) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn read_map_item<'b, R: Read>(
+        &mut self,
+        reader: &mut CborReader<'b, R>,
+        ctx: &mut T,
+    ) -> Result<(), Error> {
+        reader.read_with::<T, Self>(ctx).await?;
+        Ok(())
+    }
+}
+
+impl<'d, T: for<'b> MapEntryDecode<'b>> Decode<'d, T> for MapEntryReader<T> {
+    fn decode(d: &mut Decoder<'d>, ctx: &mut T) -> Result<Self, decode::Error> {
+        T::decode_entry(ctx, d)?;
+        Ok(Self::new())
+    }
+}
+
+pub trait MapEntryDecode<'b> {
+    fn decode_entry(&mut self, d: &mut Decoder<'b>) -> Result<(), decode::Error>;
 }
 
 #[cfg(test)]
