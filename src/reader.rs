@@ -1,10 +1,7 @@
 use core::marker::PhantomData;
 
 use embedded_io::asynch::Read;
-use minicbor::{
-    decode::{self, ArrayHeader, MapHeader},
-    Decode, Decoder,
-};
+use minicbor::{data::Type, decode, Decode, Decoder};
 
 const BREAK: u8 = 0xFF;
 
@@ -63,6 +60,86 @@ where
     buf: &'b mut [u8],
     read: usize,
     decoded: usize,
+}
+
+#[derive(Debug)]
+struct ArrayHeader(pub Option<u64>);
+
+impl<'b, C> Decode<'b, C> for ArrayHeader {
+    fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, decode::Error> {
+        let pos = d.position();
+        let ty = d.datatype()?;
+        match ty {
+            Type::Array => {}
+            Type::ArrayIndef => {}
+            ty => {
+                return Err(decode::Error::type_mismatch(ty)
+                    .with_message("expected array")
+                    .at(pos))
+            }
+        }
+
+        let buf = d.input();
+        let available = &buf[pos..];
+        if available.is_empty() {
+            return Err(decode::Error::end_of_input());
+        }
+
+        let head = decode::info::Size::head(available[0])?;
+        if available.len() < head {
+            return Err(decode::Error::end_of_input());
+        }
+
+        // Advance the decoder to the beginning of the array items
+        d.set_position(pos + head);
+
+        match decode::info::Size::tail(&available[..head])? {
+            decode::info::Size::Head => Ok(Self(Some(0))),
+            decode::info::Size::Bytes(_) => Err(decode::Error::type_mismatch(ty)),
+            decode::info::Size::Items(len) => Ok(Self(Some(len))),
+            decode::info::Size::Indef => Ok(Self(None)),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MapHeader(pub Option<u64>);
+
+impl<'b, C> Decode<'b, C> for MapHeader {
+    fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, decode::Error> {
+        let pos = d.position();
+        let ty = d.datatype()?;
+        match ty {
+            Type::Map => {}
+            Type::MapIndef => {}
+            ty => {
+                return Err(decode::Error::type_mismatch(ty)
+                    .with_message("expected map")
+                    .at(pos))
+            }
+        }
+
+        let buf = d.input();
+        let available = &buf[pos..];
+        if available.is_empty() {
+            return Err(decode::Error::end_of_input());
+        }
+
+        let head = decode::info::Size::head(available[0])?;
+        if available.len() < head {
+            return Err(decode::Error::end_of_input());
+        }
+
+        // Advance the decoder to the beginning of the array items
+        d.set_position(pos + head);
+
+        match decode::info::Size::tail(&available[..head])? {
+            decode::info::Size::Head => Ok(Self(Some(0))),
+            decode::info::Size::Bytes(_) => Err(decode::Error::type_mismatch(ty)),
+            decode::info::Size::Items(len) => Ok(Self(Some(len))),
+            decode::info::Size::Indef => Ok(Self(None)),
+        }
+    }
 }
 
 impl<'b, R: Read> CborReader<'b, R> {
@@ -303,17 +380,49 @@ pub trait MapEntryDecode<'b> {
 
 #[cfg(test)]
 mod tests {
-    use minicbor::decode::ArrayHeader;
-
     use crate::reader::CborArrayReader;
 
     use super::*;
 
+    #[test]
+    fn can_decode_small_array_header() {
+        // Given
+        let cbor: [u8; 5] = [0xf4, 0x83, 0x01, 0x02, 0x03];
+        let mut d = Decoder::new(&cbor);
+        d.set_position(1); // Skip first byte in buffer
+
+        // When
+        let header = ArrayHeader::decode(&mut d, &mut ()).unwrap();
+
+        // Then
+        assert_eq!(Some(3), header.0);
+        assert_eq!(2, d.position());
+    }
+
+    #[test]
+    fn can_decode_large_array_header() {
+        // Given
+        let cbor: [u8; 28] = [
+            0xf4, 0x98, 0x18, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+            0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x18,
+        ];
+        let mut d = Decoder::new(&cbor);
+        d.set_position(1); // Skip first byte in buffer
+
+        // When
+        let header = ArrayHeader::decode(&mut d, &mut ()).unwrap();
+
+        // Then
+        assert_eq!(Some(24), header.0);
+        assert_eq!(3, d.position());
+    }
+
     #[tokio::test]
-    async fn can_read_manually() {
+    async fn can_read_small_array_manually() {
         let mut buf = [0; 16];
-        let cbor: [u8; 4] = [0x83, 0x01, 0x02, 0x03];
+        let cbor: [u8; 5] = [0xf4, 0x83, 0x01, 0x02, 0x03];
         let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
+        assert_eq!(false, reader.read::<bool>().await.unwrap().unwrap()); // Something before the array
         assert_eq!(
             3,
             reader
@@ -328,6 +437,32 @@ mod tests {
         assert_eq!(1, reader.read::<u8>().await.unwrap().unwrap());
         assert_eq!(2, reader.read::<u8>().await.unwrap().unwrap());
         assert_eq!(3, reader.read::<u8>().await.unwrap().unwrap());
+        assert!(reader.read::<u8>().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn can_read_large_array_manually() {
+        let mut buf = [0; 16];
+        let cbor: [u8; 28] = [
+            0xf4, 0x98, 0x18, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+            0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x18,
+        ];
+        let mut reader = CborReader::new(cbor.as_slice(), &mut buf);
+        assert_eq!(false, reader.read::<bool>().await.unwrap().unwrap()); // Something before the array
+        assert_eq!(
+            24,
+            reader
+                .read::<ArrayHeader>()
+                .await
+                .unwrap()
+                .unwrap()
+                .0
+                .unwrap()
+        );
+
+        for i in 1..=24 {
+            assert_eq!(i, reader.read::<u8>().await.unwrap().unwrap());
+        }
         assert!(reader.read::<u8>().await.unwrap().is_none());
     }
 
