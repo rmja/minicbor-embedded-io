@@ -9,11 +9,8 @@ alloc = []
 [dependencies]
 defmt = { version = "0.3", optional = true }
 embedded-io = { version = "0.4", features = ["async"] }
-minicbor = "0.19"
+minicbor = { version = "0.19", git = "https://gitlab.com/twittner/minicbor", rev = "b1f3d41660ce834f068939c568f346bb36481f79" } # Merge request !28
 futures-intrusive = { version = "0.5", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
-
-[patch.crates-io]
-minicbor = { version = "0.19", git = "https://gitlab.com/twittner/minicbor", rev = "b1f3d41660ce834f068939c568f346bb36481f79" } # Merge request !28
