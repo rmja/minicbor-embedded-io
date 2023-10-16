@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use embedded_io::asynch::Read;
+use embedded_io_async::Read;
 use minicbor::{data::Type, decode, Decode, Decoder};
 
 const BREAK: u8 = 0xFF;
@@ -9,7 +9,7 @@ const BREAK: u8 = 0xFF;
 pub enum Error {
     UnexpectedEof,
     BufferTooSmall,
-    Io(embedded_io::ErrorKind),
+    Io(embedded_io_async::ErrorKind),
     Decode(decode::Error),
     #[cfg(feature = "alloc")]
     TryReserveError,
@@ -25,7 +25,7 @@ impl defmt::Format for Error {
     }
 }
 
-impl<T: embedded_io::Error> From<T> for Error {
+impl<T: embedded_io_async::Error> From<T> for Error {
     fn from(value: T) -> Self {
         Error::Io(value.kind())
     }

@@ -1,15 +1,15 @@
-use embedded_io::asynch::Write;
+use embedded_io_async::Write;
 use minicbor::{
     encode::{self, write::EndOfSlice},
     Encode,
 };
 
 pub enum Error {
-    Io(embedded_io::ErrorKind),
+    Io(embedded_io_async::ErrorKind),
     Encode(encode::Error<EndOfSlice>),
 }
 
-impl<T: embedded_io::Error> From<T> for Error {
+impl<T: embedded_io_async::Error> From<T> for Error {
     fn from(value: T) -> Self {
         Error::Io(value.kind())
     }
@@ -63,7 +63,7 @@ impl<'b, W: Write> CborWriter<'b, W> {
     ) -> Result<usize, Error> {
         let mut cursor = Cursor(&mut self.buf, 0);
         minicbor::encode_with(value, &mut cursor, ctx).map_err(Error::Encode)?;
-        
+
         let len = cursor.1;
         self.sink.write_all(&self.buf[..len]).await?;
         Ok(len)
