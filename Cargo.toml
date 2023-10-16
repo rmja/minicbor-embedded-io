@@ -7,7 +7,7 @@ readme = "README.md"
 repository = "https://github.com/rmja/minicbor-embedded-io"
 authors = ["Rasmus Melchior Jacobsen <rmja@laesoe.org>"]
 license = "MIT / Apache-2.0"
-keywords = ["embedded", "cbor", "minicbor", "embedded-io", "read", "write"]
+keywords = ["embedded", "cbor", "minicbor", "embedded-io", "async"]
 exclude = [".github"]
 
 [features]
