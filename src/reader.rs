@@ -380,6 +380,13 @@ pub trait MapEntryDecode<'b> {
 
 #[cfg(test)]
 mod tests {
+    use core::iter::repeat;
+
+    use embassy_sync::{
+        blocking_mutex::raw::CriticalSectionRawMutex,
+        pipe::{Pipe, Writer},
+    };
+
     use crate::reader::CborArrayReader;
 
     use super::*;
@@ -533,5 +540,72 @@ mod tests {
             .unwrap();
 
         assert_eq!(&[1, 2, 3], ctx.as_slice());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[tokio::test]
+    async fn can_read_fixed_array_fuzz() {
+        can_read_fixed_array_fuzz_case(1).await;
+        can_read_fixed_array_fuzz_case(2).await;
+        can_read_fixed_array_fuzz_case(3).await;
+        can_read_fixed_array_fuzz_case(4).await;
+        can_read_fixed_array_fuzz_case(5).await;
+        can_read_fixed_array_fuzz_case(6).await;
+        can_read_fixed_array_fuzz_case(7).await;
+        can_read_fixed_array_fuzz_case(8).await;
+        can_read_fixed_array_fuzz_case(9).await;
+        can_read_fixed_array_fuzz_case(10).await;
+    }
+
+    async fn can_read_fixed_array_fuzz_case(chunk_size: usize) {
+        // Given
+        const ITEM: &str = "wmbus-XXXXXXXXXXXXXXXX";
+        const LEN: usize = 950;
+        let strings: Vec<&str> = repeat(ITEM).take(LEN).collect();
+        let cbor = minicbor::to_vec(strings.as_slice()).unwrap();
+
+        static mut PIPE: Pipe<CriticalSectionRawMutex, 20> = Pipe::new();
+        let pipe = unsafe { &mut PIPE };
+        let (reader, writer) = pipe.split();
+
+        // When
+        let deserialize = body_reader(reader);
+        let write = tokio::task::spawn(ingest(writer, cbor, chunk_size));
+
+        let (deserialized, _) = tokio::join!(deserialize, write);
+
+        // Then
+        assert_eq!(LEN, deserialized.len());
+        for item in deserialized {
+            assert_eq!(ITEM, &item.0);
+        }
+
+        async fn body_reader(reader: impl Read) -> Vec<ArrayItem> {
+            let mut cbor_item_buf = [0; 1 + 22]; // text(22) "wmbus-XXXXXXXXXXXXXXXX"
+            let mut reader = CborReader::new(reader, &mut cbor_item_buf);
+            let mut entries = Vec::new();
+            reader.array(&mut entries).await.unwrap();
+            entries
+        }
+
+        async fn ingest(
+            writer: Writer<'_, CriticalSectionRawMutex, 20>,
+            cbor: Vec<u8>,
+            chunk_size: usize,
+        ) {
+            for chunk in cbor.chunks(chunk_size) {
+                writer.write(chunk).await;
+            }
+        }
+
+        struct ArrayItem(String);
+
+        impl<'b> Decode<'b, ()> for ArrayItem {
+            fn decode(d: &mut Decoder<'b>, _ctx: &mut ()) -> Result<Self, decode::Error> {
+                let text = d.str()?;
+                assert_eq!(ITEM.len(), text.len());
+                Ok(ArrayItem(text.to_string()))
+            }
+        }
     }
 }

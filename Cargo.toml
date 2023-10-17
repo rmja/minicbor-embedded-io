@@ -20,4 +20,10 @@ minicbor = "0.20"
 futures-intrusive = { version = "0.5", default-features = false }
 
 [dev-dependencies]
+critical-section = { version = "1", features = ["std"] }
+embassy-sync = { version = "0.3", features = ["nightly"] }
+minicbor = { version = "0.20", features = ["alloc"] }
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[patch.crates-io]
+embassy-sync = { version = "0.3", git = "https://github.com/embassy-rs/embassy", rev = "f0497039ed9a735dc5bc8cb05db98b35bc6b673a" } # Needed to get embeedded-io-async 0.6
