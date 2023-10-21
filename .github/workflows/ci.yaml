@@ -16,6 +16,11 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - --no-default-features
+          - --features async
     steps:
     - uses: dtolnay/rust-toolchain@master
       with:
@@ -23,14 +28,8 @@ jobs:
         components: clippy
     - uses: actions/checkout@v3
     - name: Build
-      run: |
-        cargo build
-        cargo build --features alloc
+      run: cargo build ${{ matrix.features }}
     - name: Clippy
-      run: |
-        cargo clippy
-        cargo clippy --features alloc
+      run: cargo clippy ${{ matrix.features }}
     - name: Run tests
-      run: |
-        cargo test
-        cargo test --features alloc
+      run: cargo test ${{ matrix.features }}
