@@ -557,6 +557,7 @@ mod tests {
         can_read_fixed_array_fuzz_case(10).await;
     }
 
+    #[cfg(feature = "alloc")]
     async fn can_read_fixed_array_fuzz_case(chunk_size: usize) {
         // Given
         const ITEM: &str = "wmbus-XXXXXXXXXXXXXXXX";
