@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), no_std)]
-#![feature(async_fn_in_trait)]
-#![allow(incomplete_features)]
+#![allow(async_fn_in_trait)]
 #![cfg_attr(feature = "alloc", feature(allocator_api))]
 
 pub mod reader;
