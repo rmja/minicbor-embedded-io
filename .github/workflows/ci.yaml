@@ -26,13 +26,13 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build
       run: |
-        cargo build --verbose
-        cargo build --features alloc --verbose
+        cargo build
+        cargo build --features alloc
     - name: Clippy
       run: |
-        cargo clippy --verbose
-        cargo clippy --features alloc --verbose
+        cargo clippy
+        cargo clippy --features alloc
     - name: Run tests
       run: |
-        cargo test --verbose
-        cargo test --features alloc --verbose
+        cargo test
+        cargo test --features alloc

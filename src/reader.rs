@@ -559,6 +559,8 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     async fn can_read_fixed_array_fuzz_case(chunk_size: usize) {
+        use embedded_io_async::Write;
+
         // Given
         const ITEM: &str = "wmbus-XXXXXXXXXXXXXXXX";
         const LEN: usize = 950;
@@ -590,12 +592,12 @@ mod tests {
         }
 
         async fn ingest(
-            writer: Writer<'_, CriticalSectionRawMutex, 20>,
+            mut writer: Writer<'_, CriticalSectionRawMutex, 20>,
             cbor: Vec<u8>,
             chunk_size: usize,
         ) {
             for chunk in cbor.chunks(chunk_size) {
-                writer.write(chunk).await;
+                writer.write_all(chunk).await.unwrap();
             }
         }
 
@@ -604,7 +606,7 @@ mod tests {
         impl<'b> Decode<'b, ()> for ArrayItem {
             fn decode(d: &mut Decoder<'b>, _ctx: &mut ()) -> Result<Self, decode::Error> {
                 let text = d.str()?;
-                assert_eq!(ITEM.len(), text.len());
+                assert_eq!(ITEM, text);
                 Ok(ArrayItem(text.to_string()))
             }
         }
