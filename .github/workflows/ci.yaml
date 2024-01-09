@@ -23,6 +23,9 @@ jobs:
           - --features alloc
     steps:
     - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        components: clippy
     - uses: actions/checkout@v3
     - name: Build
       run: cargo build ${{ matrix.features }}
