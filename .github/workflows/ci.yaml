@@ -48,8 +48,8 @@ jobs:
         components: clippy
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build ${{ matrix.features }}
+      run: cargo +nightly build ${{ matrix.features }}
     - name: Clippy
-      run: cargo clippy ${{ matrix.features }}
+      run: cargo +nightly clippy ${{ matrix.features }}
     - name: Run tests
-      run: cargo test ${{ matrix.features }}
+      run: cargo +nightly test ${{ matrix.features }}
