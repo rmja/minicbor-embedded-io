@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  stable:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -25,6 +25,26 @@ jobs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: stable
+        components: clippy
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build ${{ matrix.features }}
+    - name: Clippy
+      run: cargo clippy ${{ matrix.features }}
+    - name: Run tests
+      run: cargo test ${{ matrix.features }}
+  nightly:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - --no-default-features
+          - --features alloc
+          - --features allocator_api
+    steps:
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly-2023-12-20
         components: clippy
     - uses: actions/checkout@v3
     - name: Build

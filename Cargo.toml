@@ -12,6 +12,7 @@ exclude = [".github"]
 
 [features]
 alloc = []
+allocator_api = ["alloc"]
 
 [dependencies]
 defmt = { version = "0.3", optional = true }

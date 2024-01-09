@@ -312,7 +312,35 @@ impl<'b, R: Read> CborReader<'b, R> {
     }
 }
 
-#[cfg(feature = "alloc")]
+#[cfg(all(feature = "alloc", not(feature = "allocator_api")))]
+impl<T> CborArrayReader<()> for alloc::vec::Vec<T>
+where
+    for<'b> T: Decode<'b, ()>,
+{
+    fn read_begin_array(&mut self, len: Option<u64>, _ctx: &mut ()) -> Result<(), Error> {
+        if let Some(len) = len {
+            self.try_reserve_exact(len as usize)
+                .map_err(|_| Error::TryReserveError)?;
+        }
+
+        Ok(())
+    }
+
+    async fn read_array_item<'b, R: Read>(
+        &mut self,
+        reader: &mut CborReader<'b, R>,
+        _ctx: &mut (),
+    ) -> Result<(), Error> {
+        if let Some(item) = reader.read::<T>().await? {
+            self.try_reserve(1).map_err(|_| Error::TryReserveError)?;
+            self.push(item);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "allocator_api")]
 impl<T, A: core::alloc::Allocator> CborArrayReader<()> for alloc::vec::Vec<T, A>
 where
     for<'b> T: Decode<'b, ()>,
@@ -380,8 +408,10 @@ pub trait MapEntryDecode<'b> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "alloc")]
     use core::iter::repeat;
 
+    #[cfg(feature = "alloc")]
     use embassy_sync::{
         blocking_mutex::raw::CriticalSectionRawMutex,
         pipe::{Pipe, Writer},
