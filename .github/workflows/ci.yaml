@@ -44,12 +44,12 @@ jobs:
     steps:
     - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: nightly-2023-12-20
+        toolchain: nightly
         components: clippy
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo +nightly build ${{ matrix.features }}
+      run: cargo build ${{ matrix.features }}
     - name: Clippy
-      run: cargo +nightly clippy ${{ matrix.features }}
+      run: cargo clippy ${{ matrix.features }}
     - name: Run tests
-      run: cargo +nightly test ${{ matrix.features }}
+      run: cargo test ${{ matrix.features }}
