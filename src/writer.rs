@@ -9,6 +9,15 @@ pub enum Error {
     Encode(encode::Error<EndOfSlice>),
 }
 
+impl core::fmt::Debug for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Io(io) => f.debug_tuple("Io").field(io).finish(),
+            Self::Encode(enc) => f.debug_tuple("Encode").field(enc).finish(),
+        }
+    }
+}
+
 impl<T: embedded_io_async::Error> From<T> for Error {
     fn from(value: T) -> Self {
         Error::Io(value.kind())
